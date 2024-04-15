@@ -1,0 +1,498 @@
+
+```{r}
+library(quanteda)
+library(ggrepel)
+library(textclean)
+library(tidyverse)
+library(glmnet)
+library(pROC)
+library(knitr)
+library(dplyr)
+library(dtplyr)
+library(data.table)
+library(lubridate)
+library(xts)
+library(PerformanceAnalytics)
+library(knitr)
+library(kableExtra)
+library(dplyr)
+library(stm)
+library(ROSE)
+library(spacyr)
+source("TMEF_dfm.R")
+```
+
+
+###Date cleaning and Exploration 
+```{r}
+df <- fread("full_dataset-release.csv")
+```
+
+
+
+
+```{r}
+#renaming columns
+df <- df %>%
+  rename(
+    tweet = TWEET,
+    stock = STOCK,
+    one_day_return ="1_DAY_RETURN", 
+    seven_day_return = "7_DAY_RETURN",
+    date = DATE
+  )
+
+df <- df %>%
+  mutate(date = as.Date(date, format = "%d/%m/%Y"))
+
+```
+
+```{r}
+industries <- read_csv("industries.csv")
+```
+```{r}
+merged_df <- merge(df, industries, by = "stock", all.x = TRUE)
+
+head(merged_df)
+```
+
+```{r}
+rows_with_null <- sum(!complete.cases(merged_df))
+print(rows_with_null)
+
+#since they are only 150, we will drop all rows with missing data
+df <- na.omit(merged_df)
+
+#Remove html links: 
+merged_df$tweet <- replace_url(merged_df$tweet)
+
+```
+
+The function replace_emoji replaces emojis with text representations 
+while replace_emoji_identifier replaces with a unique identifier that corresponds to
+lexicon::hash_sentiment_emoji for use in the sentimentr package.
+```{r}
+df_emoji_text <- df
+df_emoji_identifier <- df
+df_emoji_text$tweet <- replace_emoji(df$tweet)
+df_emoji_identifier$tweet<- replace_emoji(df$tweet) 
+```
+
+
+Exploring companies by tweet count
+```{r}
+tweet_counts <- df %>%
+  group_by(stock) %>%
+  summarise(num_tweets = n())
+
+tweet_counts <- tweet_counts %>%
+  arrange(desc(num_tweets))
+
+top_10 <- head(tweet_counts, 10)
+lowest_10 <- tail(tweet_counts, 10)
+
+ggplot(top_10, aes(x = reorder(stock, num_tweets), y = num_tweets)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  geom_text(aes(label = num_tweets), vjust = -0.5, size = 3) +
+  labs(x = "Company", y = "Number of Tweets", title = "Top 10 Companies by Number of Tweets") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggplot(lowest_10, aes(x = reorder(stock, num_tweets), y = num_tweets)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  geom_text(aes(label = num_tweets), vjust = -0.5, size = 3) +
+  labs(x = "Company", y = "Number of Tweets", title = "Lowest 10 Companies by Number of Tweets") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+faang_tweet_counts <- df %>%
+  filter(stock %in% c("Facebook", "Apple", "Amazon", "Netflix", "Google")) %>%
+  group_by(stock) %>%
+  summarise(num_tweets = n())
+
+
+ggplot(faang_tweet_counts, aes(x = reorder(stock, num_tweets), y = num_tweets)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  geom_text(aes(label = num_tweets), vjust = -0.5, size = 3) +
+  labs(x = "Company", y = "Number of Tweets", title = "FAANG by Number of Tweets") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+
+
+Number of Tweets with Positive vs. Negative Sentiment (According to LTSM and Textblob Polarity)
+```{r}
+# Calculate summary statistics for LSTM_POLARITY and TEXTBLOB_POLARITY by stock
+sentiment_summary <- df %>%
+  group_by(stock) %>%
+  summarise(
+    avg_lstm_polarity = mean(LSTM_POLARITY, na.rm = TRUE),
+    avg_textblob_polarity = mean(TEXTBLOB_POLARITY, na.rm = TRUE),
+    total_tweets = n()
+  )
+
+ggplot(sentiment_summary, aes(x = reorder(stock, avg_lstm_polarity), y = avg_lstm_polarity)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(x = "Stock", y = "Average LSTM Polarity", title = "Average LSTM Polarity by Stock") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggplot(sentiment_summary, aes(x = reorder(stock, avg_textblob_polarity), y = avg_textblob_polarity)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(x = "Stock", y = "Average TextBlob Polarity", title = "Average TextBlob Polarity by Stock") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+faang_sentiment_summary <- sentiment_summary %>%
+    filter(stock %in% c("Facebook", "Apple", "Amazon", "Netflix", "Google")) 
+ 
+
+ggplot(faang_sentiment_summary, aes(x = reorder(stock, avg_lstm_polarity), y = avg_lstm_polarity)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(x = "Stock", y = "FAANG Average LSTM Polarity", title = "FAANG Average LSTM Polarity by Stock") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggplot(faang_sentiment_summary, aes(x = reorder(stock, avg_textblob_polarity), y = avg_textblob_polarity)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(x = "Stock", y = "FAANG Average TextBlob Polarity", title = "FAANG Average TextBlob Polarity by Stock") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+
+```
+```{r}
+company_colors <- c("Facebook" = "red", "Apple" = "blue", "Amazon" = "darkgreen", "Netflix" = "orange", "Google" = "purple")
+
+sentiment_plot <- ggplot(sentiment_summary, aes(x = reorder(stock, avg_lstm_polarity), y = avg_lstm_polarity, fill = stock)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = company_colors) +
+  labs(x = NULL, y = "Average LSTM Polarity", title = "Average LSTM Polarity by Stock") +  # Remove x-axis label
+  theme_minimal() +
+  theme(axis.text.x = element_blank(),  
+        axis.title.x = element_blank(),  
+        axis.title.y = element_blank(),  
+        plot.title = element_text(hjust = 0.5))
+
+
+print(sentiment_plot)
+```
+
+
+# Focusing on FAANG 
+
+Since all the FAANGs have positive sentiment, training on FAANG might not yield great results for transfer learning because our model may not be exposed to negative sentiment 
+
+Let's Zoom into FAANG: 
+```{r}
+faang <- merged_df %>%
+  filter(stock %in% c("Facebook", "Apple", "Amazon", "Netflix", "Google"))
+```
+
+Across Dates: 
+```{r}
+tweet_counts <- faang %>%
+  filter(year(date) == 2017) %>%
+  group_by(date) %>%
+  summarise(num_tweets = n())
+
+# Plot the number of tweets per date
+ggplot(tweet_counts, aes(x = date, y = num_tweets)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(x = "Date", y = "Number of Tweets", title = "Number of Tweets per Date in 2017") +
+  theme_minimal() 
+```
+Interesting we see that the vast majority of the tweets come  either the first or last day of the month for 2017
+
+```{r}
+tweet_counts <- faang %>%
+  filter(year(date) == 2018) %>%
+  group_by(date) %>%
+  summarise(num_tweets = n())
+
+ggplot(tweet_counts, aes(x = date, y = num_tweets)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(x = "Date", y = "Number of Tweets", title = "Number of Tweets per Date in 2018") +
+  theme_minimal() 
+```
+For 2018 it is much more evenly distributed across the months, however we also see some gaps in the data, such as the first half of the year and the month of October. 
+
+Let's look at Tweet Word Count: 
+```{r}
+df <- df %>%
+  mutate(tweet_wordcount=str_count(tweet,"[[:alpha:]]+"))
+
+
+summarized <-   df %>%
+                group_by(stock) %>%
+                summarise(avg = mean(tweet_wordcount, na.rm = TRUE))
+
+print(summarized)
+print(mean(summarized$avg))
+print(sd(summarized$avg))
+```
+
+
+# Build a DFM for FAANG 
+```{r}
+DFM <- TMEF_dfm(faang$tweet,ngrams=1:2)
+```
+
+Most common words For Faang: 
+```{r}
+word_freq <- colSums(DFM)
+word_freq_df <- data.frame(word = names(word_freq), freq = word_freq)
+word_freq_df <- word_freq_df[order(-word_freq_df$freq), ]
+top_n <- 10
+ggplot(head(word_freq_df, top_n), aes(x = reorder(word, freq), y = freq)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  labs(x = "Word", y = "Frequency", title = "Top 10 Most Common Words in FAANG Tweets") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),plot.title = element_text(hjust = 0.5))
+```
+
+###Here we begin with out actual analysis in Predicting Industry: 
+We only kept the most popular industries and removed Facebook, because it has the most reviews and will skew the data
+```{r}
+industry_df <- merged_df %>% filter(stock != "Facebook") %>% 
+  filter(industry %in% c("Automotive", "E-commerce", "Media", "Retail", "Technology"))
+```
+
+
+```{r}
+
+# Assuming industry_df contains the necessary data
+ggplot(industry_df, aes(x = industry)) +
+  geom_bar(fill = "skyblue", color = "black") +
+  labs(title = "Distribution of Industry",
+       x = "Industry",
+       y = "Frequency") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  theme_minimal() +
+  guides(fill = FALSE) +
+  theme(axis.title.x = element_blank(), plot.title = element_text(hjust = 0.5)) +
+  scale_y_continuous(expand = c(0, 0))
+
+```
+To be used for custom stop words: 
+```{r}
+companies <- c("Yahoo", "YHOO","Wells Fargo", "WFC","Walmart", "WMT","Volkswagen", "VOW3.DE","Vodafone", "VOD","Visa", "V","Viacom", "VIAC","Verizon", "VZ","UPS", "UPS","TripAdvisor", "TRIP", "Toyota", "TM","TMobile", "TMUS","Thales", "HO.PA", "Tesco", "TSCO.L","Starbucks", "SBUX","Sony", "SONY","Siemens", "SIE.DE","Shell", "RDS.A","SAP", "SAP","Santander", "SAN","Samsung", "005930.KS","salesforce.com", "CRM","Ryanair", "RYAAY","Reuters", "TRI","Pfizer", "PFE","Pepsi", "PEP",
+ "PayPal", "PYPL","P&G", "PG","Oracle", "ORCL","Nissan", "7201.T","Nike", "NKE","Next", "NXT.L","Netflix", "NFLX",
+"Nestle", "NSRGY","Morgan Stanley", "MS","Microsoft", "MSFT","McDonald's", "MCD","Mastercard", "MA","L'Oreal", "OR", "Kroger", "KR","Kellogg's", "K","JPMorgan", "JPM","John Deere", "DE","Intel", "INTC","IBM", "IBM","Hyundai", "005380.KS", "HSBC", "HSBC", "HP", "HPQ", "Honda", "HMC","Home Depot", "HD", "Heineken", "HEINY","H&M", "HM-B.ST","GSK", "GSK.L","Groupon", "GRPN","Google", "GOOGL","Goldman Sachs", "GS","Gillette", "GILC34.SA","General Electric", "GE","Ford", "F","FedEx", "FDX","Facebook", "FB","Exxon", "XOM","Expedia", "EXPE","Equinor", "EQNR","eBay", "EBAY", "easyJet", "EZJ.L","Disney", "DIS","Deutsche Bank", "DB","Danone", "BN.PA","CVS Health", "CVS","Costco", "COST","Comcast", "CMCSA","Colgate", "CL","CocaCola", "KO","Citigroup", "C","Cisco", "CSCO","Chevron", "CVX","CBS", "VIAC","Carrefour", "CA.PA","Cardinal Health", "CAH","Burberry", "BRBY.L","BP", "BP","bookingcom", "BKNG","Boeing", "BA","BMW", "BMW.DE","BlackRock", "BLK","Bayer", "BAYRY","BASF", "BAS.DE","Bank of America", "BAC","Aviva", "AV.L","Audi", "NSU.DE","AT&T", "T", "AstraZeneca", "AZN","ASOS", "ASC.L","Apple", "AAPL","American Express", "AXP","Amazon", "AMZN","Allianz", "ALV.DE","Adobe", "ADBE","adidas", "ADDYY", "21CF", "TFCF")
+
+```
+
+
+
+```{r}
+spacyr::spacy_initialize()
+```
+Function to extract "nsubj" from Spacey
+```{r}
+extract_subject <- function(text) {
+  parsed <- spacy_parse(text,
+                     lemma = T,
+                     dependency = T)
+  
+  main_nouns <- parsed$lemma[parsed$dep == "nsubj"]
+  
+  if (length(main_nouns) > 1) {
+    return(paste(paste0(main_nouns, "_subj"), collapse = ", "))
+  }
+  
+  if(length(main_nouns) == 0) {
+    return("")
+  }
+  return(paste0(main_nouns, "_subj"))
+}
+```
+
+
+Training and Testing different models: 
+```{r}
+set.seed(42)
+
+sample <- industry_df[sample(nrow(industry_df), nrow(industry_df)*0.4), ]
+train_split <- sample(1:nrow(sample), 0.8 * nrow(sample))
+
+
+ind_train_data<-sample%>%
+  slice(train_split)
+
+ind_test_data<-sample %>%
+  slice(-train_split)
+
+ind_train_data$subject <- sapply(ind_train_data$tweet, extract_subject)
+ind_test_data$subject <- sapply(ind_test_data$tweet, extract_subject)
+
+
+train_dfm_tweet <-TMEF_dfm(ind_train_data$tweet,ngrams=1:2, min.prop = 0.01)
+train_dfm_subject <-TMEF_dfm(ind_train_data$subject,ngrams=1, min.prop = 0.00)
+
+train_dfm <- cbind(train_dfm_tweet, train_dfm_subject)
+
+test_dfm_tweet <-TMEF_dfm(ind_test_data$tweet,
+                 ngrams=1:2,
+                 min.prop=0) %>%
+                 dfm_match(colnames(train_dfm_tweet))
+
+test_dfm_subject <-TMEF_dfm(ind_test_data$subject,
+            ngrams=1, min.prop=0) %>%
+            dfm_match(colnames(train_dfm_subject))
+
+test_dfm <- cbind(test_dfm_tweet, test_dfm_subject)
+
+train_Y <- ind_train_data$industry
+industry_model_with_subject <- cv.glmnet(x=train_dfm,
+                                y=train_Y,
+                                family="multinomial", alpha = 1)
+
+industry_model <- cv.glmnet(x=train_dfm_tweet,
+                                y=train_Y,
+                                family="multinomial", alpha = 1)
+
+
+
+industry_predict_label_with_subject<-predict(industry_model_with_subject,
+                                newx = test_dfm,
+                                type="class")[,1]
+
+industry_predict_label<-predict(industry_model,
+                                newx = test_dfm_tweet,
+                                type="class")[,1]
+
+
+industry_model_subject_only <- cv.glmnet(x=train_dfm_subject,
+                                y=train_Y,
+                                family="multinomial", alpha = 1)
+
+industry_predict_label_subject_only<-predict(industry_model_subject_only,
+                                newx = test_dfm_subject,
+                                type="class")[,1]
+
+industry_dfm_train_no_comp_names<-TMEF_dfm(ind_train_data$tweet,ngrams=1:2, custom_stop_words = companies, min.prop = 0.01)
+
+industry_dfm_test_no_comp_names <-TMEF_dfm(ind_test_data$tweet,
+                                  ngrams=1:2, custom_stop_words = companies, min.prop=0) %>%
+                                  dfm_match(colnames(industry_dfm_train_no_comp_names))
+
+
+industry_model_no_comp_names <- cv.glmnet(x=industry_dfm_train_no_comp_names,
+                                y=train_Y,
+                                family="multinomial", alpha = 1)
+
+
+industry_predict_label_no_comp_names<-predict(industry_model_no_comp_names,
+                                     newx = industry_dfm_test_no_comp_names,
+                                     type="class")[,1]
+
+
+```
+
+
+
+
+Confusion Matrix for Regular N-gram model
+```{r}
+
+conf_matrix_df <- as.data.frame(table( ind_test_data$industry, industry_predict_label ))
+colnames(conf_matrix_df) <- c("Predicted", "Actual", "Count")
+
+
+conf_matrix_df$Predicted <- factor(conf_matrix_df$Predicted, levels = rev(levels(conf_matrix_df$Predicted)))
+
+ggplot(conf_matrix_df, aes(x = Predicted, y = Actual, fill = Count)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = Count), vjust = 1) +
+  scale_fill_gradient(low = "lightblue", high = "darkblue") +
+  labs(title = "Confusion Matrix",
+       x = "Predicted",
+       y = "Actual") +
+  theme_minimal() + 
+  theme(plot.title = element_text(hjust = 0.5))  
+
+
+
+```
+
+Building Baseline Model: 
+```{r}
+classes <- unique(ind_train_data$industry)
+class_distribution <- table(ind_train_data$industry) / nrow(ind_train_data)
+
+random_labels_test <- sample(classes, size = num_instances_test, replace = TRUE, prob = class_distribution)
+
+acc_random_model <- mean(ind_test_data$industry == random_labels_test)
+
+```
+
+Extracting Examples 
+```{r}
+
+ind_test_data$predict_1 <- industry_predict_label
+ind_test_data$predict_2 <- industry_predict_label_with_subject
+indices_mis <- which(industry_predict_label != ind_test_data$industry & industry_predict_label_with_subject == ind_test_data$industry)
+
+
+
+mislabeled_samples <- ind_test_data[indices_mis, ]
+
+# View the mislabeled samples
+examples_2 <-mislabeled_samples %>% filter (V1 %in% c(405288,681439, 564024,397220,819101, 399185, 186295, 51097, 650525)) %>% select(V1, tweet, subject, predict_1,predict_2)
+
+```
+
+
+Graphing the accuracy Initial Models we thought of 
+```{r}
+
+data <- data.frame(
+  Method = c("Benchmark- Random Model", "N-gram Model (with company names as stop words)", "N-gram Model"),
+  Accuracy = c(acc_random_model, acc_model_no_comp_name, acc_normal_model)
+)
+
+data$Method <- factor(data$Method, levels = data$Method[order(-data$Accuracy)])
+
+ggplot(data, aes(x = Method, y = Accuracy, fill = Method)) +
+  geom_bar(stat = "identity", position = "dodge", fill = "skyblue", color = "black") +
+  geom_text(aes(label = round(Accuracy, 2)), 
+            hjust = -0.1, 
+            vjust = 0.5, 
+            size = 3) + 
+  labs(title = "Accuracy Comparison") + 
+  coord_flip(ylim = c(0, 1)) + 
+  theme_minimal() + 
+  guides(fill = FALSE) + 
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank())
+
+```
+
+
+Graphing the accuracy new models with the addition of Spacy: 
+```{r}
+data <- data.frame(
+  Method = c("Benchmark- Random Model","Subject Alone", "N-gram Model", "N-gram Model with Subject"),
+  Accuracy = c(acc_random_model, acc_model_only_subject, acc_normal_model, acc_model_with_subject )
+)
+
+data$Method <- factor(data$Method, levels = data$Method[order(-data$Accuracy)])
+
+ggplot(data, aes(x = Method, y = Accuracy, fill = Method)) +
+  geom_bar(stat = "identity", position = "dodge", fill = "skyblue", color = "black") +
+  geom_text(aes(label = round(Accuracy, 2)), 
+            hjust = -0.1, 
+            vjust = 0.5,
+            size = 3) +
+  labs(title = "Accuracy Comparison") + 
+  coord_flip(ylim = c(0, 1)) + 
+  theme_minimal() + 
+  guides(fill = FALSE) +
+  theme(axis.title.x = element_blank(), 
+        axis.title.y = element_blank())
+```
+
+
