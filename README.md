@@ -24,3 +24,17 @@ Since FAANG has a huge weight on the market (S&P 500)
 2. Vector Embedding
 3. N-gram LASSO combined with Vector Embedding
 4. Positive Sentiment and Uncertainty sentiment with Loughran-McDonald dictionary
+
+## Files 
+"TMEF Project.pdf" - Final presentation: Winning best returns based analysis for Text Mining for Economics and Finance (Imperial College Business School MSc Class)
+
+"binary_prediction (1).Rmd" - Main RMD file which produced binary predicitons for company returns (1 or 0 == positive or negative)
+
+"TMEF_dfm.R" - Document Feature Matrix function (leveraged in "binary_prediction.rmd")
+
+"vectorFunctions (1).R" - Useful functions for handling word vectors
+
+"Industry_prediction.Rmd" - Prediction of company industries based upon tweets (done to test benchmark models)
+
+"industries.csv" - List of industries used for model training
+
