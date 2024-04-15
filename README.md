@@ -38,5 +38,6 @@ Since FAANG has a huge weight on the market (S&P 500)
 
 "industries.csv" - List of industries used for model training
 
+## Format of Data Analyzed
 	TWEET	STOCK	DATE	LAST_PRICE	1_DAY_RETURN	2_DAY_RETURN	3_DAY_RETURN	7_DAY_RETURN	PX_VOLUME	VOLATILITY_10D	VOLATILITY_30D	LSTM_POLARITY	TEXTBLOB_POLARITY
- ![image](https://github.com/pakwule/Stock-Returns-Predictions-with-Tweets/assets/25259384/f4dc03fb-e5f6-45ec-a70d-c6b16a561977)
+
